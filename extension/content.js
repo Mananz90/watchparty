@@ -52,20 +52,34 @@
   }
 
   const SEEK_JUMP_THRESHOLD = 2.5; // seconds — ignore smaller jumps as buffering, not a real seek
+  const DRIFT_CORRECTION_THRESHOLD = 8; // seconds — only force-seek on play/pause if drift is this large
+  const MIN_CORRECTION_GAP_MS = 2500; // don't touch currentTime more often than this (DRM players can error on rapid seeks)
   let lastKnownTime = 0;
+  let lastCorrectionAt = 0;
+
+  function safeSetCurrentTime(t) {
+    const now = Date.now();
+    if (now - lastCorrectionAt < MIN_CORRECTION_GAP_MS) return;
+    lastCorrectionAt = now;
+    try {
+      video.currentTime = t;
+    } catch (e) {
+      log('currentTime set failed', e);
+    }
+  }
 
   function applyRemoteSync(msg) {
     video = video || findVideo();
     if (!video) return;
     suppressSync = true;
     if (msg.action === 'play') {
-      if (Math.abs(video.currentTime - msg.time) > 1.5) video.currentTime = msg.time;
+      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) safeSetCurrentTime(msg.time);
       video.play().catch(() => {});
     } else if (msg.action === 'pause') {
-      if (Math.abs(video.currentTime - msg.time) > 1.5) video.currentTime = msg.time;
+      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) safeSetCurrentTime(msg.time);
       video.pause();
     } else if (msg.action === 'seek') {
-      video.currentTime = msg.time;
+      safeSetCurrentTime(msg.time);
     }
     lastKnownTime = msg.time;
     // Netflix/Hotstar keep firing buffering-related events for a bit after we
