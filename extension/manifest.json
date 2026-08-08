@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Watch Party (Free Sync + Chat)",
-  "version": "1.0.0",
-  "description": "Sync play/pause/seek and chat with friends while each of you watches on your own Netflix, Hotstar, or Prime Video account.",
+  "name": "Watchparty (Free Sync + Chat)",
+  "version": "1.1.0",
+  "description": "Sync play/pause/seek, chat, emoji reactions, and a live viewer list with friends — each of you watches on your own Netflix, Hotstar, or Prime Video account.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
     "https://*.netflix.com/*",
@@ -12,7 +12,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Watch Party"
+    "default_title": "Watchparty"
   },
   "_icons_note": "Add icons/icon16.png, icon48.png, icon128.png then re-add an \"icons\" key if you want a custom toolbar icon.",
   "background": {

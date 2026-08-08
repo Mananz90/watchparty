@@ -113,6 +113,91 @@
   font-size: 11px;
 }
 
+#wp-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wp-avatar {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: white;
+  flex-shrink: 0;
+}
+
+.wp-host-badge {
+  position: absolute;
+  bottom: -3px;
+  right: -3px;
+  font-size: 9px;
+  color: #ffd54a;
+  text-shadow: 0 0 2px black;
+}
+
+#wp-host-lock-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #ccc;
+  cursor: pointer;
+}
+
+#wp-reactions {
+  display: flex;
+  gap: 4px;
+}
+
+.wp-reaction-btn {
+  background: #1c1c1f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 14px;
+  cursor: pointer;
+  flex: 1;
+}
+
+.wp-reaction-btn:hover {
+  background: #29292e;
+}
+
+#wp-typing {
+  font-size: 11px;
+  color: #888;
+  min-height: 14px;
+  font-style: italic;
+}
+
+#wp-reaction-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2147483646;
+  overflow: hidden;
+}
+
+.wp-floating-emoji {
+  position: absolute;
+  bottom: 10%;
+  font-size: 32px;
+  animation: wp-float-up 2.2s ease-out forwards;
+}
+
+@keyframes wp-float-up {
+  0% { transform: translateY(0) scale(0.6); opacity: 0; }
+  15% { transform: translateY(-40px) scale(1.1); opacity: 1; }
+  100% { transform: translateY(-320px) scale(1); opacity: 0; }
+}
+
 #wp-chat-log {
   height: 160px;
   overflow-y: auto;

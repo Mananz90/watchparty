@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 const PORT = process.env.PORT || 8787;
 const wss = new WebSocketServer({ port: PORT });
 
-/** rooms: Map<roomId, Set<ws>> */
+/** rooms: Map<roomId, Set<ws>>. First member to join (still connected) is host. */
 const rooms = new Map();
 
 function send(ws, msg) {
@@ -17,6 +17,23 @@ function broadcast(roomId, msg, exceptWs) {
   for (const client of members) {
     if (client !== exceptWs) send(client, msg);
   }
+}
+
+function hostOf(roomId) {
+  const members = rooms.get(roomId);
+  if (!members || members.size === 0) return null;
+  return [...members][0]; // Set preserves insertion order — earliest survivor is host
+}
+
+function roster(roomId) {
+  const members = rooms.get(roomId);
+  if (!members) return [];
+  const host = hostOf(roomId);
+  return [...members].map((m) => ({ id: m.id, name: m.name, isHost: m === host }));
+}
+
+function broadcastRoster(roomId) {
+  broadcast(roomId, { type: 'roster', members: roster(roomId) }, null);
 }
 
 wss.on('connection', (ws) => {
@@ -43,7 +60,8 @@ wss.on('connection', (ws) => {
 
         console.log(`[join] "${ws.name}" -> room "${roomId}" (now ${rooms.get(roomId).size} in room)`);
         broadcast(roomId, { type: 'presence', event: 'joined', name: ws.name, count: rooms.get(roomId).size }, ws);
-        send(ws, { type: 'joined', roomId, count: rooms.get(roomId).size });
+        send(ws, { type: 'joined', roomId, count: rooms.get(roomId).size, id: ws.id });
+        broadcastRoster(roomId);
         break;
       }
 
@@ -70,6 +88,20 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'reaction': {
+        if (!ws.roomId) return;
+        const emoji = String(msg.emoji || '').slice(0, 8);
+        if (!emoji) return;
+        broadcast(ws.roomId, { type: 'reaction', name: ws.name, emoji, ts: Date.now() }, null);
+        break;
+      }
+
+      case 'typing': {
+        if (!ws.roomId) return;
+        broadcast(ws.roomId, { type: 'typing', name: ws.name }, ws);
+        break;
+      }
+
       default:
         break;
     }
@@ -83,6 +115,7 @@ wss.on('connection', (ws) => {
         rooms.delete(ws.roomId);
       } else {
         broadcast(ws.roomId, { type: 'presence', event: 'left', name: ws.name, count: members.size }, ws);
+        broadcastRoster(ws.roomId);
       }
     }
   });

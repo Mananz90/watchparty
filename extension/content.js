@@ -1,21 +1,37 @@
 (() => {
   const SERVER_URL = 'wss://watchparty-sync.onrender.com';
+  const REACTIONS = ['👍', '❤️', '😂', '😮', '🔥', '👏'];
+  const AVATAR_COLORS = ['#e50914', '#0af', '#0c6', '#f90', '#a5f', '#0cc', '#f4a'];
 
   let ws = null;
   let roomId = null;
   let name = 'Guest';
+  let myId = null;
   let video = null;
   let suppressSync = false; // true while we're applying a remote event, to avoid echo loops
-  let lastSentAction = null;
   let overlayEl = null;
+  let roster = []; // [{ id, name, isHost }]
+  let hostLockEnabled = false;
+  let typingTimer = null;
 
   function log(...args) {
-    console.log('[WatchParty]', ...args);
+    console.log('[Watchparty]', ...args);
   }
 
   function findVideo() {
     const adapter = window.__wpAdapter;
     return adapter ? adapter.getVideo() : document.querySelector('video');
+  }
+
+  function isHost() {
+    const me = roster.find((m) => m.id === myId);
+    return !!me?.isHost;
+  }
+
+  function colorFor(id) {
+    let hash = 0;
+    for (const ch of String(id)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    return AVATAR_COLORS[hash % AVATAR_COLORS.length];
   }
 
   function connect(room, displayName) {
@@ -41,13 +57,22 @@
 
   function handleServerMessage(msg) {
     if (msg.type === 'sync') {
+      if (hostLockEnabled && !roster.find((m) => m.name === msg.from)?.isHost) return; // ignore non-host sync when locked
       applyRemoteSync(msg);
     } else if (msg.type === 'chat') {
       appendChat(msg.name, msg.text);
     } else if (msg.type === 'presence') {
       appendChat('System', `${msg.name} ${msg.event} (${msg.count} watching)`);
     } else if (msg.type === 'joined') {
+      myId = msg.id;
       appendChat('System', `You joined room ${msg.roomId} (${msg.count} watching)`);
+    } else if (msg.type === 'roster') {
+      roster = msg.members;
+      renderRoster();
+    } else if (msg.type === 'reaction') {
+      showFloatingReaction(msg.emoji, msg.name);
+    } else if (msg.type === 'typing') {
+      showTypingIndicator(msg.name);
     }
   }
 
@@ -90,6 +115,7 @@
 
   function sendSync(action, time) {
     if (!ws || ws.readyState !== WebSocket.OPEN || !video || suppressSync) return;
+    if (hostLockEnabled && !isHost()) return; // host-only mode: don't even broadcast our own control input
     ws.send(JSON.stringify({ type: 'sync', action, time }));
   }
 
@@ -126,7 +152,7 @@
     setTimeout(attachVideoListeners, 1000);
   }
 
-  // ---------- Overlay UI (chat + room controls) ----------
+  // ---------- Overlay UI ----------
 
   function leaveParty() {
     if (ws) {
@@ -134,6 +160,8 @@
       ws = null;
     }
     roomId = null;
+    roster = [];
+    renderRoster();
     chrome.storage.local.remove(['wpRoomId']);
     setStatus('Not connected');
     appendChat('System', 'You left the party.');
@@ -145,7 +173,7 @@
     overlayEl.id = 'wp-overlay';
     overlayEl.innerHTML = `
       <div id="wp-header">
-        <span id="wp-title">Watch Party</span>
+        <span id="wp-title">🎬 Watchparty</span>
         <div id="wp-header-btns">
           <button id="wp-leave" title="Leave party">Leave</button>
           <button id="wp-toggle" title="Minimize">—</button>
@@ -158,7 +186,14 @@
           <button id="wp-join-btn">Join</button>
         </div>
         <div id="wp-status">Not connected</div>
+        <div id="wp-roster"></div>
+        <label id="wp-host-lock-row">
+          <input type="checkbox" id="wp-host-lock" />
+          Host-only controls
+        </label>
+        <div id="wp-reactions"></div>
         <div id="wp-chat-log"></div>
+        <div id="wp-typing"></div>
         <div id="wp-chat-row">
           <input id="wp-chat-input" placeholder="Say something…" />
           <button id="wp-chat-send">Send</button>
@@ -167,15 +202,19 @@
     `;
     const tab = document.createElement('button');
     tab.id = 'wp-edge-tab';
-    tab.textContent = 'Watch Party';
+    tab.textContent = 'Watchparty';
     tab.onclick = () => {
       overlayEl.classList.remove('wp-hidden');
       tab.classList.remove('wp-visible');
     };
 
+    const reactLayer = document.createElement('div');
+    reactLayer.id = 'wp-reaction-layer';
+
     const parent = window.__wpAdapter?.getOverlayParent() || document.body;
     parent.appendChild(overlayEl);
     parent.appendChild(tab);
+    parent.appendChild(reactLayer);
 
     overlayEl.querySelector('#wp-toggle').onclick = () => {
       overlayEl.classList.add('wp-hidden');
@@ -187,6 +226,28 @@
       const nm = overlayEl.querySelector('#wp-name-input').value.trim() || 'Guest';
       if (room) connect(room, nm);
     };
+    overlayEl.querySelector('#wp-host-lock').onchange = (e) => {
+      hostLockEnabled = e.target.checked;
+      appendChat('System', hostLockEnabled
+        ? 'Host-only controls enabled — only the host can play/pause/seek for everyone.'
+        : 'Host-only controls disabled — anyone can control playback.');
+    };
+
+    const reactionsEl = overlayEl.querySelector('#wp-reactions');
+    for (const emoji of REACTIONS) {
+      const btn = document.createElement('button');
+      btn.className = 'wp-reaction-btn';
+      btn.textContent = emoji;
+      btn.onclick = () => {
+        // Server echoes the reaction back to everyone in the room, sender included —
+        // showFloatingReaction() fires from that broadcast, not from this click directly.
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'reaction', emoji }));
+        }
+      };
+      reactionsEl.appendChild(btn);
+    }
+
     const chatInput = overlayEl.querySelector('#wp-chat-input');
     const sendChat = () => {
       const text = chatInput.value.trim();
@@ -196,6 +257,12 @@
     };
     overlayEl.querySelector('#wp-chat-send').onclick = sendChat;
     chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+    chatInput.addEventListener('input', () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      clearTimeout(typingTimer);
+      ws.send(JSON.stringify({ type: 'typing' }));
+      typingTimer = setTimeout(() => {}, 1500);
+    });
 
     // Fully hide the widget while the window/tab isn't visible (e.g. minimized),
     // and bring it back automatically once it's visible again.
@@ -215,6 +282,19 @@
     buildOverlay().querySelector('#wp-status').textContent = text;
   }
 
+  function renderRoster() {
+    const el = buildOverlay().querySelector('#wp-roster');
+    if (!roster.length) {
+      el.innerHTML = '';
+      return;
+    }
+    el.innerHTML = roster.map((m) => `
+      <span class="wp-avatar" style="background:${colorFor(m.id)}" title="${escapeHtml(m.name)}${m.isHost ? ' (host)' : ''}">
+        ${escapeHtml(m.name.slice(0, 1).toUpperCase())}${m.isHost ? '<span class="wp-host-badge">★</span>' : ''}
+      </span>
+    `).join('');
+  }
+
   function appendChat(from, text) {
     const logEl = buildOverlay().querySelector('#wp-chat-log');
     const line = document.createElement('div');
@@ -222,6 +302,25 @@
     line.innerHTML = `<strong>${escapeHtml(from)}:</strong> ${escapeHtml(text)}`;
     logEl.appendChild(line);
     logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  let typingHideTimer = null;
+  function showTypingIndicator(who) {
+    const el = buildOverlay().querySelector('#wp-typing');
+    el.textContent = `${who} is typing…`;
+    clearTimeout(typingHideTimer);
+    typingHideTimer = setTimeout(() => { el.textContent = ''; }, 2000);
+  }
+
+  function showFloatingReaction(emoji, from) {
+    const layer = document.getElementById('wp-reaction-layer');
+    if (!layer) return;
+    const el = document.createElement('div');
+    el.className = 'wp-floating-emoji';
+    el.textContent = emoji;
+    el.style.left = `${20 + Math.random() * 60}%`;
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), 2200);
   }
 
   function escapeHtml(s) {
@@ -243,7 +342,7 @@
       // Invite link: https://…?wp_room=<code> — auto-join on load
       const urlRoom = new URLSearchParams(window.location.search).get('wp_room');
       if (urlRoom) {
-        const nm = data.wpName || window.prompt('Joining Watch Party — enter your name:', '') || 'Guest';
+        const nm = data.wpName || window.prompt('Joining Watchparty — enter your name:', '') || 'Guest';
         overlayEl.querySelector('#wp-room-input').value = urlRoom;
         overlayEl.querySelector('#wp-name-input').value = nm;
         connect(urlRoom, nm);
