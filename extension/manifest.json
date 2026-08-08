@@ -12,9 +12,18 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Watchparty"
+    "default_title": "Watchparty",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
-  "_icons_note": "Add icons/icon16.png, icon48.png, icon128.png then re-add an \"icons\" key if you want a custom toolbar icon.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "background": {
     "service_worker": "background.js"
   },
