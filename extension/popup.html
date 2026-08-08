@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Watch Party</title>
+  <style>
+    body {
+      width: 260px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #141418;
+      color: #f2f2f2;
+      padding: 14px;
+    }
+    h1 { font-size: 15px; margin: 0 0 10px; }
+    label { font-size: 11px; color: #aaa; display: block; margin-top: 8px; }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      margin-top: 4px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #1c1c1f;
+      color: white;
+    }
+    button {
+      width: 100%;
+      margin-top: 12px;
+      padding: 8px;
+      border: none;
+      border-radius: 5px;
+      background: #e50914;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #2b2b30;
+      margin-top: 6px;
+    }
+    p.hint { font-size: 11px; color: #888; margin-top: 10px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <h1>🎬 Watch Party</h1>
+  <label>Room code</label>
+  <input id="roomInput" placeholder="e.g. movie-night-42" />
+  <label>Your name</label>
+  <input id="nameInput" placeholder="Your name" />
+  <button id="newRoomBtn" class="secondary">Generate new room code</button>
+  <button id="joinBtn">Join on this tab</button>
+  <button id="copyLinkBtn" class="secondary">Copy invite link</button>
+  <p id="copyStatus" class="hint" style="display:none;color:#8f8;">Link copied!</p>
+  <p class="hint">Send the invite link to friends. They need their own Netflix / Hotstar / Prime Video subscription open on the same title — clicking the link auto-joins the room. This only syncs play/pause/seek and adds chat.</p>
+  <script src="popup.js"></script>
+</body>
+</html>

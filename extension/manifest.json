@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Watch Party (Free Sync + Chat)",
+  "version": "1.0.0",
+  "description": "Sync play/pause/seek and chat with friends while each of you watches on your own Netflix, Hotstar, or Prime Video account.",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": [
+    "https://*.netflix.com/*",
+    "https://*.hotstar.com/*",
+    "https://*.primevideo.com/*",
+    "https://*.amazon.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Watch Party"
+  },
+  "_icons_note": "Add icons/icon16.png, icon48.png, icon128.png then re-add an \"icons\" key if you want a custom toolbar icon.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.netflix.com/*"],
+      "js": ["adapters/netflix.js", "content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.hotstar.com/*"],
+      "js": ["adapters/hotstar.js", "content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.primevideo.com/*", "https://*.amazon.com/gp/video/*"],
+      "js": ["adapters/primevideo.js", "content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
