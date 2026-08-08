@@ -51,6 +51,9 @@
     }
   }
 
+  const SEEK_JUMP_THRESHOLD = 2.5; // seconds — ignore smaller jumps as buffering, not a real seek
+  let lastKnownTime = 0;
+
   function applyRemoteSync(msg) {
     video = video || findVideo();
     if (!video) return;
@@ -64,22 +67,37 @@
     } else if (msg.action === 'seek') {
       video.currentTime = msg.time;
     }
-    setTimeout(() => { suppressSync = false; }, 300);
+    lastKnownTime = msg.time;
+    // Netflix/Hotstar keep firing buffering-related events for a bit after we
+    // apply a correction; hold suppression longer than the old 300ms so those
+    // don't get mistaken for a new user seek and echoed straight back.
+    setTimeout(() => { suppressSync = false; }, 1200);
   }
 
-  function sendSync(action) {
+  function sendSync(action, time) {
     if (!ws || ws.readyState !== WebSocket.OPEN || !video || suppressSync) return;
-    ws.send(JSON.stringify({ type: 'sync', action, time: video.currentTime }));
+    ws.send(JSON.stringify({ type: 'sync', action, time }));
   }
 
   function bindVideoElement(el) {
     video = el;
-    video.addEventListener('play', () => sendSync('play'));
-    video.addEventListener('pause', () => sendSync('pause'));
+    lastKnownTime = video.currentTime;
+    video.addEventListener('play', () => sendSync('play', video.currentTime));
+    video.addEventListener('pause', () => sendSync('pause', video.currentTime));
+    video.addEventListener('timeupdate', () => {
+      // Track normal playback progress so we can tell a real seek (big jump)
+      // apart from Netflix's own buffering/quality-switch stutters (small jump).
+      if (!video.seeking) lastKnownTime = video.currentTime;
+    });
     let seekTimer = null;
     video.addEventListener('seeking', () => {
       clearTimeout(seekTimer);
-      seekTimer = setTimeout(() => sendSync('seek'), 250);
+      seekTimer = setTimeout(() => {
+        const jump = Math.abs(video.currentTime - lastKnownTime);
+        if (jump < SEEK_JUMP_THRESHOLD) return; // buffering blip, not a real seek — don't broadcast
+        sendSync('seek', video.currentTime);
+        lastKnownTime = video.currentTime;
+      }, 400);
     });
     log(`Attached to ${window.__wpAdapter?.siteName || 'video'} player`);
   }
