@@ -1,5 +1,5 @@
 (() => {
-  const SERVER_URL = 'ws://localhost:8787'; // change to your deployed server, e.g. wss://your-domain
+  const SERVER_URL = 'wss://watchparty-sync.onrender.com';
 
   let ws = null;
   let roomId = null;
