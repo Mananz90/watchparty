@@ -7,24 +7,13 @@ window.__wpAdapter = {
     return document.body;
   },
 
-  // Netflix's DRM-protected player can throw a playback error ("Pardon the
-  // interruption") when video.currentTime is set directly, especially for
-  // large jumps. It tolerates seeks driven through its own player controls
-  // much better, so we simulate the same arrow-key shortcuts Netflix's UI
-  // uses (10s per press) instead of writing the property directly.
-  async seekTo(video, targetTime) {
-    const ARROW_STEP = 10; // seconds Netflix moves per arrow-key press
-    const MAX_STEPS = 60;  // safety cap (~10 minutes) so a huge jump doesn't hammer the page
-    const diff = targetTime - video.currentTime;
-    const steps = Math.min(Math.round(Math.abs(diff) / ARROW_STEP), MAX_STEPS);
-    if (steps === 0) return;
-    const key = diff > 0 ? 'ArrowRight' : 'ArrowLeft';
-
-    for (let i = 0; i < steps; i++) {
-      const opts = { key, code: key, bubbles: true, cancelable: true };
-      document.dispatchEvent(new KeyboardEvent('keydown', opts));
-      document.dispatchEvent(new KeyboardEvent('keyup', opts));
-      await new Promise((r) => setTimeout(r, 120)); // Netflix needs spacing between presses to register each one
-    }
-  },
+  // Netflix's DRM-protected player throws a playback error ("Pardon the
+  // interruption", code M7375) whenever position is changed programmatically
+  // — this held true both for direct video.currentTime writes AND simulated
+  // arrow-key presses (Netflix appears to reject synthetic/untrusted input
+  // for seeking specifically). There's no reliable script-driven seek left
+  // to try, so Netflix opts out of auto-seeking entirely; content.js falls
+  // back to a chat notification so the other viewer can seek manually with
+  // Netflix's own scrubber, which is real user input and never triggers this.
+  supportsProgrammaticSeek: false,
 };

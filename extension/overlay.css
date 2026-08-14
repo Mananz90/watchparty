@@ -113,6 +113,26 @@
   font-size: 11px;
 }
 
+#wp-share-btn {
+  background: #2b2b30;
+  color: white;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#wp-share-btn:hover {
+  background: #333338;
+}
+
+#wp-share-status {
+  font-size: 10px;
+  color: #8f8;
+  word-break: break-all;
+}
+
 #wp-roster {
   display: flex;
   flex-wrap: wrap;

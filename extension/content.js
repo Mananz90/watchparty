@@ -82,19 +82,23 @@
   let lastKnownTime = 0;
   let lastCorrectionAt = 0;
 
+  function canSeekProgrammatically() {
+    return window.__wpAdapter?.supportsProgrammaticSeek !== false;
+  }
+
+  function formatTime(t) {
+    const s = Math.max(0, Math.round(t));
+    const m = Math.floor(s / 60);
+    const sec = String(s % 60).padStart(2, '0');
+    return `${m}:${sec}`;
+  }
+
   async function safeSetCurrentTime(t) {
     const now = Date.now();
     if (now - lastCorrectionAt < MIN_CORRECTION_GAP_MS) return;
     lastCorrectionAt = now;
     try {
-      const adapter = window.__wpAdapter;
-      if (adapter?.seekTo) {
-        // Sites with DRM-protected players (Netflix) prefer a UI-driven seek
-        // over a raw currentTime write — see adapters/netflix.js.
-        await adapter.seekTo(video, t);
-      } else {
-        video.currentTime = t;
-      }
+      video.currentTime = t;
     } catch (e) {
       log('seek failed', e);
     }
@@ -104,14 +108,21 @@
     video = video || findVideo();
     if (!video) return;
     suppressSync = true;
+    const canSeek = canSeekProgrammatically();
     if (msg.action === 'play') {
-      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
+      if (canSeek && Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
       video.play().catch(() => {});
     } else if (msg.action === 'pause') {
-      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
+      if (canSeek && Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
       video.pause();
     } else if (msg.action === 'seek') {
-      await safeSetCurrentTime(msg.time);
+      if (canSeek) {
+        await safeSetCurrentTime(msg.time);
+      } else {
+        // Netflix's DRM player rejects any programmatic position change for
+        // seeking — notify instead of risking a playback error.
+        appendChat('System', `${msg.from || 'Someone'} jumped to ${formatTime(msg.time)} — seek there manually to catch up.`);
+      }
     }
     lastKnownTime = msg.time;
     // Netflix/Hotstar keep firing buffering-related events for a bit after we
@@ -194,6 +205,8 @@
           <input id="wp-name-input" placeholder="Your name" />
           <button id="wp-join-btn">Join</button>
         </div>
+        <button id="wp-share-btn" title="Copy a link that auto-joins this room on this title">🔗 Copy invite link</button>
+        <div id="wp-share-status"></div>
         <div id="wp-status">Not connected</div>
         <div id="wp-roster"></div>
         <label id="wp-host-lock-row">
@@ -240,6 +253,23 @@
       appendChat('System', hostLockEnabled
         ? 'Host-only controls enabled — only the host can play/pause/seek for everyone.'
         : 'Host-only controls disabled — anyone can control playback.');
+    };
+    overlayEl.querySelector('#wp-share-btn').onclick = async () => {
+      let room = overlayEl.querySelector('#wp-room-input').value.trim();
+      if (!room) {
+        room = roomId || `stream-${Math.floor(1000 + Math.random() * 9000)}`;
+        overlayEl.querySelector('#wp-room-input').value = room;
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.set('wp_room', room);
+      const statusEl = overlayEl.querySelector('#wp-share-status');
+      try {
+        await navigator.clipboard.writeText(url.toString());
+        statusEl.textContent = 'Link copied — send it so they land on this exact title and auto-join.';
+      } catch {
+        statusEl.textContent = url.toString(); // clipboard blocked — show it so it can be copied by hand
+      }
+      setTimeout(() => { statusEl.textContent = ''; }, 4000);
     };
 
     const reactionsEl = overlayEl.querySelector('#wp-reactions');
