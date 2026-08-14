@@ -114,10 +114,6 @@
   let lastKnownTime = 0;
   let lastCorrectionAt = 0;
 
-  function canSeekProgrammatically() {
-    return window.__wpAdapter?.supportsProgrammaticSeek !== false;
-  }
-
   function formatTime(t) {
     const s = Math.max(0, Math.round(t));
     const m = Math.floor(s / 60);
@@ -129,46 +125,34 @@
     const now = Date.now();
     if (now - lastCorrectionAt < MIN_CORRECTION_GAP_MS) return;
     lastCorrectionAt = now;
+    const adapter = window.__wpAdapter;
     try {
-      video.currentTime = t;
+      if (adapter?.seekTo) {
+        // Sites with DRM-protected players (Netflix) need to go through their
+        // own internal player API instead of a raw currentTime write — see
+        // adapters/netflix.js + adapters/netflix-page-bridge.js.
+        await adapter.seekTo(video, t);
+      } else {
+        video.currentTime = t;
+      }
     } catch (e) {
-      log('seek failed', e);
+      log('seek failed, notifying instead', e);
+      appendChat('System', `Couldn't auto-seek — the room is at ${formatTime(t)}, seek there manually to catch up.`);
     }
-  }
-
-  function notifyManualCatchUp(msg) {
-    // Sites that reject programmatic seeks (Netflix) can't be auto-corrected —
-    // tell the viewer where to seek to by hand instead of silently drifting.
-    appendChat('System', `${msg.from === 'room' ? 'The room' : (msg.from || 'Someone')} is at ${formatTime(msg.time)} — seek there manually to catch up.`);
   }
 
   async function applyRemoteSync(msg) {
     video = video || findVideo();
     if (!video) return;
     suppressSync = true;
-    const canSeek = canSeekProgrammatically();
     if (msg.action === 'play') {
-      const drift = Math.abs(video.currentTime - msg.time);
-      if (drift > DRIFT_CORRECTION_THRESHOLD) {
-        if (canSeek) await safeSetCurrentTime(msg.time);
-        else notifyManualCatchUp(msg);
-      }
+      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
       video.play().catch(() => {});
     } else if (msg.action === 'pause') {
-      const drift = Math.abs(video.currentTime - msg.time);
-      if (drift > DRIFT_CORRECTION_THRESHOLD) {
-        if (canSeek) await safeSetCurrentTime(msg.time);
-        else notifyManualCatchUp(msg);
-      }
+      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
       video.pause();
     } else if (msg.action === 'seek') {
-      if (canSeek) {
-        await safeSetCurrentTime(msg.time);
-      } else {
-        // Netflix's DRM player rejects any programmatic position change for
-        // seeking — notify instead of risking a playback error.
-        appendChat('System', `${msg.from || 'Someone'} jumped to ${formatTime(msg.time)} — seek there manually to catch up.`);
-      }
+      await safeSetCurrentTime(msg.time);
     }
     lastKnownTime = msg.time;
     // Netflix/Hotstar keep firing buffering-related events for a bit after we
