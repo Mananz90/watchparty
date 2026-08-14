@@ -7,6 +7,11 @@ const wss = new WebSocketServer({ port: PORT });
 /** rooms: Map<roomId, Set<ws>>. First member to join (still connected) is host. */
 const rooms = new Map();
 
+/** roomState: Map<roomId, { playing, time, ts }> — last known playback state, so a
+ *  newly joined viewer can be brought to the current play/pause + position instead
+ *  of starting from whatever the streaming site does by default (e.g. autoplay). */
+const roomState = new Map();
+
 function send(ws, msg) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
 }
@@ -62,6 +67,14 @@ wss.on('connection', (ws) => {
         broadcast(roomId, { type: 'presence', event: 'joined', name: ws.name, count: rooms.get(roomId).size }, ws);
         send(ws, { type: 'joined', roomId, count: rooms.get(roomId).size, id: ws.id });
         broadcastRoster(roomId);
+
+        // Bring the new viewer to the room's current play/pause + position
+        // instead of leaving them on whatever the streaming site defaults to.
+        const state = roomState.get(roomId);
+        if (state) {
+          const time = state.playing ? state.time + (Date.now() - state.ts) / 1000 : state.time;
+          send(ws, { type: 'sync', action: state.playing ? 'play' : 'pause', time, from: 'room', ts: Date.now() });
+        }
         break;
       }
 
@@ -69,6 +82,14 @@ wss.on('connection', (ws) => {
       case 'sync': {
         if (!ws.roomId) return;
         console.log(`[sync] "${ws.name}" in "${ws.roomId}": ${msg.action} @ ${msg.time?.toFixed?.(1) ?? msg.time}s`);
+
+        const prev = roomState.get(ws.roomId);
+        roomState.set(ws.roomId, {
+          playing: msg.action === 'play' ? true : msg.action === 'pause' ? false : (prev?.playing ?? false),
+          time: msg.time,
+          ts: Date.now(),
+        });
+
         broadcast(ws.roomId, {
           type: 'sync',
           action: msg.action,       // 'play' | 'pause' | 'seek'
@@ -113,6 +134,7 @@ wss.on('connection', (ws) => {
       members.delete(ws);
       if (members.size === 0) {
         rooms.delete(ws.roomId);
+        roomState.delete(ws.roomId);
       } else {
         broadcast(ws.roomId, { type: 'presence', event: 'left', name: ws.name, count: members.size }, ws);
         broadcastRoster(ws.roomId);
