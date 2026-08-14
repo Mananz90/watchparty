@@ -18,6 +18,38 @@
     console.log('[Watchparty]', ...args);
   }
 
+  // When the extension is reloaded/updated in chrome://extensions while a tab
+  // is already open, that tab's old content script keeps running but loses
+  // its link to the extension — any further chrome.* call throws "Extension
+  // context invalidated." These wrappers catch that instead of letting it go
+  // uncaught, and prompt for the one-time page refresh that actually fixes it.
+  let contextInvalidatedWarned = false;
+  function isExtensionContextValid() {
+    try { return !!chrome.runtime?.id; } catch { return false; }
+  }
+  function warnContextInvalidated() {
+    if (contextInvalidatedWarned) return;
+    contextInvalidatedWarned = true;
+    if (overlayEl) {
+      const banner = document.createElement('div');
+      banner.id = 'wp-context-banner';
+      banner.textContent = 'Watchparty was updated — refresh this page to reconnect.';
+      overlayEl.prepend(banner);
+    }
+  }
+  function safeStorageSet(obj) {
+    if (!isExtensionContextValid()) return warnContextInvalidated();
+    try { chrome.storage.local.set(obj); } catch { warnContextInvalidated(); }
+  }
+  function safeStorageGet(keys, cb) {
+    if (!isExtensionContextValid()) return warnContextInvalidated();
+    try { chrome.storage.local.get(keys, cb); } catch { warnContextInvalidated(); }
+  }
+  function safeStorageRemove(keys) {
+    if (!isExtensionContextValid()) return warnContextInvalidated();
+    try { chrome.storage.local.remove(keys); } catch { warnContextInvalidated(); }
+  }
+
   function findVideo() {
     const adapter = window.__wpAdapter;
     return adapter ? adapter.getVideo() : document.querySelector('video');
@@ -52,7 +84,7 @@
       handleServerMessage(msg);
     };
 
-    chrome.storage.local.set({ wpRoomId: room, wpName: name });
+    safeStorageSet({ wpRoomId: room, wpName: name });
   }
 
   function handleServerMessage(msg) {
@@ -182,7 +214,7 @@
     roomId = null;
     roster = [];
     renderRoster();
-    chrome.storage.local.remove(['wpRoomId']);
+    safeStorageRemove(['wpRoomId']);
     setStatus('Not connected');
     appendChat('System', 'You left the party.');
   }
@@ -372,7 +404,8 @@
     buildOverlay();
     attachVideoListeners();
 
-    chrome.storage.local.get(['wpRoomId', 'wpName'], (data) => {
+    safeStorageGet(['wpRoomId', 'wpName'], (data) => {
+      data = data || {};
       if (data.wpRoomId) {
         overlayEl.querySelector('#wp-room-input').value = data.wpRoomId;
         overlayEl.querySelector('#wp-name-input').value = data.wpName || '';
@@ -393,13 +426,17 @@
       }
     });
 
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg.type === 'wp-join' && msg.roomId) {
-        overlayEl.querySelector('#wp-room-input').value = msg.roomId;
-        overlayEl.querySelector('#wp-name-input').value = msg.name || '';
-        connect(msg.roomId, msg.name);
-      }
-    });
+    if (isExtensionContextValid()) {
+      try {
+        chrome.runtime.onMessage.addListener((msg) => {
+          if (msg.type === 'wp-join' && msg.roomId) {
+            overlayEl.querySelector('#wp-room-input').value = msg.roomId;
+            overlayEl.querySelector('#wp-name-input').value = msg.name || '';
+            connect(msg.roomId, msg.name);
+          }
+        });
+      } catch { warnContextInvalidated(); }
+    }
   }
 
   if (document.readyState === 'complete') init();

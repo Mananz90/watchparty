@@ -133,6 +133,14 @@
   word-break: break-all;
 }
 
+#wp-context-banner {
+  background: #3a2a00;
+  color: #ffcf6a;
+  font-size: 11px;
+  padding: 6px 10px;
+  text-align: center;
+}
+
 #wp-roster {
   display: flex;
   flex-wrap: wrap;
