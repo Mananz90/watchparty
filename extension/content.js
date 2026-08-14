@@ -82,34 +82,43 @@
   let lastKnownTime = 0;
   let lastCorrectionAt = 0;
 
-  function safeSetCurrentTime(t) {
+  async function safeSetCurrentTime(t) {
     const now = Date.now();
     if (now - lastCorrectionAt < MIN_CORRECTION_GAP_MS) return;
     lastCorrectionAt = now;
     try {
-      video.currentTime = t;
+      const adapter = window.__wpAdapter;
+      if (adapter?.seekTo) {
+        // Sites with DRM-protected players (Netflix) prefer a UI-driven seek
+        // over a raw currentTime write — see adapters/netflix.js.
+        await adapter.seekTo(video, t);
+      } else {
+        video.currentTime = t;
+      }
     } catch (e) {
-      log('currentTime set failed', e);
+      log('seek failed', e);
     }
   }
 
-  function applyRemoteSync(msg) {
+  async function applyRemoteSync(msg) {
     video = video || findVideo();
     if (!video) return;
     suppressSync = true;
     if (msg.action === 'play') {
-      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) safeSetCurrentTime(msg.time);
+      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
       video.play().catch(() => {});
     } else if (msg.action === 'pause') {
-      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) safeSetCurrentTime(msg.time);
+      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
       video.pause();
     } else if (msg.action === 'seek') {
-      safeSetCurrentTime(msg.time);
+      await safeSetCurrentTime(msg.time);
     }
     lastKnownTime = msg.time;
     // Netflix/Hotstar keep firing buffering-related events for a bit after we
     // apply a correction; hold suppression longer than the old 300ms so those
-    // don't get mistaken for a new user seek and echoed straight back.
+    // don't get mistaken for a new user seek and echoed straight back. A
+    // multi-step Netflix arrow-key seek can itself take several seconds, so
+    // this timer starts only once that correction has actually finished.
     setTimeout(() => { suppressSync = false; }, 1200);
   }
 
