@@ -136,16 +136,30 @@
     }
   }
 
+  function notifyManualCatchUp(msg) {
+    // Sites that reject programmatic seeks (Netflix) can't be auto-corrected —
+    // tell the viewer where to seek to by hand instead of silently drifting.
+    appendChat('System', `${msg.from === 'room' ? 'The room' : (msg.from || 'Someone')} is at ${formatTime(msg.time)} — seek there manually to catch up.`);
+  }
+
   async function applyRemoteSync(msg) {
     video = video || findVideo();
     if (!video) return;
     suppressSync = true;
     const canSeek = canSeekProgrammatically();
     if (msg.action === 'play') {
-      if (canSeek && Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
+      const drift = Math.abs(video.currentTime - msg.time);
+      if (drift > DRIFT_CORRECTION_THRESHOLD) {
+        if (canSeek) await safeSetCurrentTime(msg.time);
+        else notifyManualCatchUp(msg);
+      }
       video.play().catch(() => {});
     } else if (msg.action === 'pause') {
-      if (canSeek && Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
+      const drift = Math.abs(video.currentTime - msg.time);
+      if (drift > DRIFT_CORRECTION_THRESHOLD) {
+        if (canSeek) await safeSetCurrentTime(msg.time);
+        else notifyManualCatchUp(msg);
+      }
       video.pause();
     } else if (msg.action === 'seek') {
       if (canSeek) {
@@ -215,6 +229,7 @@
     roster = [];
     renderRoster();
     safeStorageRemove(['wpRoomId']);
+    if (overlayEl) overlayEl.querySelector('#wp-room-input').value = '';
     setStatus('Not connected');
     appendChat('System', 'You left the party.');
   }
