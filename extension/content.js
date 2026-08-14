@@ -66,25 +66,48 @@
     return AVATAR_COLORS[hash % AVATAR_COLORS.length];
   }
 
+  let intentionalDisconnect = false;
+  let reconnectAttempt = 0;
+  let reconnectTimer = null;
+
   function connect(room, displayName) {
     if (ws) ws.close();
+    clearTimeout(reconnectTimer);
+    intentionalDisconnect = false;
     roomId = room;
     name = displayName || 'Guest';
+    openSocket();
+    safeStorageSet({ wpRoomId: room, wpName: name });
+  }
 
+  function openSocket() {
     ws = new WebSocket(SERVER_URL);
     ws.onopen = () => {
+      reconnectAttempt = 0;
       ws.send(JSON.stringify({ type: 'join', roomId, name }));
       setStatus(`Connected — room ${roomId}`);
     };
-    ws.onclose = () => setStatus('Disconnected');
+    ws.onclose = () => {
+      if (intentionalDisconnect || !roomId) {
+        setStatus('Disconnected');
+        return;
+      }
+      // Lost connection unexpectedly (e.g. a hosting proxy dropping an idle
+      // socket) — reconnect and rejoin the same room automatically instead
+      // of leaving the widget silently dead until the user notices and
+      // clicks Join again.
+      reconnectAttempt++;
+      const delay = Math.min(1000 * 2 ** (reconnectAttempt - 1), 15000);
+      setStatus(`Reconnecting… (${Math.round(delay / 1000)}s)`);
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(openSocket, delay);
+    };
     ws.onerror = () => setStatus('Connection error');
     ws.onmessage = (evt) => {
       let msg;
       try { msg = JSON.parse(evt.data); } catch { return; }
       handleServerMessage(msg);
     };
-
-    safeStorageSet({ wpRoomId: room, wpName: name });
   }
 
   function handleServerMessage(msg) {
@@ -205,6 +228,8 @@
   // ---------- Overlay UI ----------
 
   function leaveParty() {
+    intentionalDisconnect = true;
+    clearTimeout(reconnectTimer);
     if (ws) {
       ws.close();
       ws = null;
