@@ -45,8 +45,6 @@ wss.on('connection', (ws) => {
   ws.id = randomUUID();
   ws.roomId = null;
   ws.name = 'Guest';
-  ws.isAlive = true;
-  ws.on('pong', () => { ws.isAlive = true; });
 
   ws.on('message', (raw) => {
     let msg;
@@ -148,18 +146,15 @@ wss.on('connection', (ws) => {
 // Hosting proxies (Render's included) tend to silently close WebSocket
 // connections after a short idle period with no traffic — which is exactly
 // what a quiet "just watching" room looks like, since play/pause/chat events
-// are the only things that were generating traffic before. Sending a real WS
-// ping frame on an interval keeps the connection alive through that, and lets
-// us detect + drop truly dead connections (missed two pongs in a row).
-const HEARTBEAT_INTERVAL_MS = 25000;
+// are the only things that were generating traffic before. Raw WS ping/pong
+// control frames turned out not to be reliable here — a load-balancer-style
+// proxy can terminate/absorb those without forwarding them end-to-end, so
+// this sends an ordinary application-level message on an interval instead,
+// which can't be treated any differently by a proxy than any other traffic.
+const HEARTBEAT_INTERVAL_MS = 20000;
 setInterval(() => {
   for (const ws of wss.clients) {
-    if (ws.isAlive === false) {
-      ws.terminate();
-      continue;
-    }
-    ws.isAlive = false;
-    ws.ping();
+    send(ws, { type: 'ping' });
   }
 }, HEARTBEAT_INTERVAL_MS);
 
