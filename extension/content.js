@@ -8,7 +8,6 @@
   let name = 'Guest';
   let myId = null;
   let video = null;
-  let suppressSync = false; // true while we're applying a remote event, to avoid echo loops
   let overlayEl = null;
   let roster = []; // [{ id, name, isHost }]
   let hostLockEnabled = false;
@@ -131,13 +130,43 @@
     }
   }
 
-  const SEEK_JUMP_THRESHOLD = 2.5; // seconds — ignore smaller jumps as buffering, not a real seek
-  const DRIFT_CORRECTION_THRESHOLD = 8; // seconds — only force-seek on play/pause if drift is this large
-  const MIN_CORRECTION_GAP_MS = 1200; // spacing between actual currentTime writes (DRM players can error on rapid seeks)
+  // ---------- Per-platform sync tuning ----------
+  // Adapters can override any of these via window.__wpAdapter.syncConfig so
+  // fixing one site's quirks (e.g. Hotstar's player) can't change behavior
+  // on sites that already work fine (Netflix, Prime).
+  const DEFAULT_SYNC_CONFIG = {
+    seekJumpThreshold: 2.5,      // seconds — ignore smaller jumps as buffering, not a real seek
+    driftCorrectionThreshold: 8, // seconds — only force-seek on play/pause if drift is this large
+    minCorrectionGapMs: 1200,    // spacing between actual currentTime writes (DRM players can error on rapid seeks)
+    usePolling: false,           // some players don't fire 'seeking'/'seeked' reliably — polling
+                                  // currentTime directly is a robust fallback that doesn't depend
+                                  // on any specific event firing at all
+    pollIntervalMs: 400,
+  };
+  function getSyncConfig() {
+    return { ...DEFAULT_SYNC_CONFIG, ...(window.__wpAdapter?.syncConfig || {}) };
+  }
+
   let lastKnownTime = 0;
   let lastCorrectionAt = 0;
   let pendingCorrectionTimer = null;
   let pendingCorrectionTarget = null;
+
+  // Tracks the most recent sync applied FROM the network, so a genuine new
+  // local action (e.g. the user pressing Play) can be told apart from our
+  // own correction echoing back through the player's native events. This
+  // replaces a blanket "ignore everything locally for N ms" window, which
+  // could swallow a real subsequent action if it landed inside that window —
+  // that was the cause of "play doesn't sync sometimes".
+  let lastAppliedSync = null; // { action, time, appliedAt }
+
+  function isEchoOfAppliedSync(action, time) {
+    if (!lastAppliedSync) return false;
+    if (Date.now() - lastAppliedSync.appliedAt > 900) return false;
+    if (lastAppliedSync.action !== action) return false;
+    if (Math.abs(time - lastAppliedSync.time) > 1.5) return false;
+    return true;
+  }
 
   function formatTime(t) {
     const s = Math.max(0, Math.round(t));
@@ -147,9 +176,10 @@
   }
 
   async function safeSetCurrentTime(t) {
+    const config = getSyncConfig();
     const now = Date.now();
     const elapsed = now - lastCorrectionAt;
-    if (elapsed < MIN_CORRECTION_GAP_MS) {
+    if (elapsed < config.minCorrectionGapMs) {
       // Too soon after the last correction to apply another one safely —
       // remember this as the latest target and apply it once the cooldown
       // elapses, instead of dropping it. Dropping it silently is what made
@@ -163,7 +193,7 @@
           const target = pendingCorrectionTarget;
           pendingCorrectionTarget = null;
           if (target != null) safeSetCurrentTime(target);
-        }, MIN_CORRECTION_GAP_MS - elapsed);
+        }, config.minCorrectionGapMs - elapsed);
       }
       return;
     }
@@ -187,67 +217,98 @@
   async function applyRemoteSync(msg) {
     video = video || findVideo();
     if (!video) return;
-    suppressSync = true;
+    const config = getSyncConfig();
+    lastAppliedSync = { action: msg.action, time: msg.time, appliedAt: Date.now() };
     if (msg.action === 'play') {
-      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
+      if (Math.abs(video.currentTime - msg.time) > config.driftCorrectionThreshold) await safeSetCurrentTime(msg.time);
       video.play().catch(() => {});
     } else if (msg.action === 'pause') {
-      if (Math.abs(video.currentTime - msg.time) > DRIFT_CORRECTION_THRESHOLD) await safeSetCurrentTime(msg.time);
+      if (Math.abs(video.currentTime - msg.time) > config.driftCorrectionThreshold) await safeSetCurrentTime(msg.time);
       video.pause();
     } else if (msg.action === 'seek') {
       await safeSetCurrentTime(msg.time);
     }
     lastKnownTime = msg.time;
-    // Netflix/Hotstar keep firing buffering-related events for a bit after we
-    // apply a correction; hold suppression longer than the old 300ms so those
-    // don't get mistaken for a new user seek and echoed straight back. A
-    // multi-step Netflix arrow-key seek can itself take several seconds, so
-    // this timer starts only once that correction has actually finished.
-    setTimeout(() => { suppressSync = false; }, 1200);
+    // Refresh the echo window's timestamp now that the correction (if any)
+    // has actually finished, so a slow multi-step correction doesn't count
+    // as "stale" and let its own trailing native events slip through as a
+    // new local action.
+    lastAppliedSync = { action: msg.action, time: msg.time, appliedAt: Date.now() };
   }
 
   function sendSync(action, time) {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !video || suppressSync) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !video) return;
     if (hostLockEnabled && !isHost()) return; // host-only mode: don't even broadcast our own control input
+    if (isEchoOfAppliedSync(action, time)) return; // our own correction echoing back, not a new action
     ws.send(JSON.stringify({ type: 'sync', action, time }));
   }
 
   function bindVideoElement(el) {
     video = el;
     lastKnownTime = video.currentTime;
+    const config = getSyncConfig();
+
     video.addEventListener('play', () => sendSync('play', video.currentTime));
     video.addEventListener('pause', () => sendSync('pause', video.currentTime));
     video.addEventListener('timeupdate', () => {
       // Track normal playback progress so we can tell a real seek (big jump)
-      // apart from Netflix's own buffering/quality-switch stutters (small jump).
+      // apart from a platform's own buffering/quality-switch stutters (small jump).
       if (!video.seeking) lastKnownTime = video.currentTime;
     });
-    // 'seeked' fires once the browser considers a seek genuinely complete —
-    // more accurate than reading currentTime off 'seeking' + a guessed
-    // timeout, since the seek itself can take longer to settle than that
-    // timeout on some players. But some custom streaming players (Hotstar's
-    // included) don't reliably fire 'seeked' at all, especially for short
-    // in-buffer skips — so 'seeking' still starts a fallback timer that
-    // fires the broadcast itself if 'seeked' never shows up.
-    let seekFallbackTimer = null;
-    let seekHandled = true;
 
-    function reportSeek() {
-      seekHandled = true;
-      clearTimeout(seekFallbackTimer);
-      const jump = Math.abs(video.currentTime - lastKnownTime);
-      if (jump < SEEK_JUMP_THRESHOLD) { lastKnownTime = video.currentTime; return; } // buffering blip, not a real seek
-      sendSync('seek', video.currentTime);
-      lastKnownTime = video.currentTime;
+    if (config.usePolling) {
+      // Some custom players (Hotstar's included) don't reliably fire
+      // 'seeking'/'seeked' at all, especially for short in-buffer skips —
+      // event-based detection can silently miss real seeks there. Polling
+      // currentTime directly and comparing its progression against real
+      // elapsed time sidesteps the problem entirely, since it doesn't
+      // depend on any specific event firing.
+      const myVideo = el;
+      let lastPollAt = performance.now();
+      let lastPollVideoTime = myVideo.currentTime;
+      const intervalId = setInterval(() => {
+        if (video !== myVideo) { clearInterval(intervalId); return; } // rebound to a different element — stop
+        const nowReal = performance.now();
+        const realElapsedSec = (nowReal - lastPollAt) / 1000;
+        const videoTime = myVideo.currentTime;
+        const videoElapsedSec = videoTime - lastPollVideoTime;
+        lastPollAt = nowReal;
+        lastPollVideoTime = videoTime;
+
+        const isSeek = myVideo.paused
+          ? Math.abs(videoElapsedSec) > config.seekJumpThreshold
+          : Math.abs(videoElapsedSec - realElapsedSec) > config.seekJumpThreshold;
+
+        if (isSeek) {
+          sendSync('seek', videoTime);
+          lastKnownTime = videoTime;
+        }
+      }, config.pollIntervalMs);
+    } else {
+      // 'seeked' fires once the browser considers a seek genuinely complete —
+      // more accurate than reading currentTime off 'seeking' + a guessed
+      // timeout, since the seek itself can take longer to settle than that
+      // timeout on some players. 'seeking' still arms a fallback timer in
+      // case a given player never fires 'seeked' for a particular seek.
+      let seekFallbackTimer = null;
+      let seekHandled = true;
+      const reportSeek = () => {
+        seekHandled = true;
+        clearTimeout(seekFallbackTimer);
+        const jump = Math.abs(video.currentTime - lastKnownTime);
+        if (jump < config.seekJumpThreshold) { lastKnownTime = video.currentTime; return; } // buffering blip, not a real seek
+        sendSync('seek', video.currentTime);
+        lastKnownTime = video.currentTime;
+      };
+      video.addEventListener('seeking', () => {
+        seekHandled = false;
+        clearTimeout(seekFallbackTimer);
+        seekFallbackTimer = setTimeout(() => { if (!seekHandled) reportSeek(); }, 700);
+      });
+      video.addEventListener('seeked', reportSeek);
     }
 
-    video.addEventListener('seeking', () => {
-      seekHandled = false;
-      clearTimeout(seekFallbackTimer);
-      seekFallbackTimer = setTimeout(() => { if (!seekHandled) reportSeek(); }, 700);
-    });
-    video.addEventListener('seeked', reportSeek);
-    log(`Attached to ${window.__wpAdapter?.siteName || 'video'} player`);
+    log(`Attached to ${window.__wpAdapter?.siteName || 'video'} player (${config.usePolling ? 'polling' : 'event'} seek detection)`);
   }
 
   function attachVideoListeners() {
