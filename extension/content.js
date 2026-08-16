@@ -222,15 +222,16 @@
       // apart from Netflix's own buffering/quality-switch stutters (small jump).
       if (!video.seeking) lastKnownTime = video.currentTime;
     });
-    let seekTimer = null;
-    video.addEventListener('seeking', () => {
-      clearTimeout(seekTimer);
-      seekTimer = setTimeout(() => {
-        const jump = Math.abs(video.currentTime - lastKnownTime);
-        if (jump < SEEK_JUMP_THRESHOLD) return; // buffering blip, not a real seek — don't broadcast
-        sendSync('seek', video.currentTime);
-        lastKnownTime = video.currentTime;
-      }, 400);
+    // 'seeked' (not 'seeking') fires once the browser considers the seek
+    // actually complete, guaranteeing currentTime is the real final position —
+    // reading it off 'seeking' + a guessed timeout was broadcasting a stale
+    // position on sites like Hotstar where the seek itself (fetching new
+    // segments for adaptive streaming) can take longer than that timeout.
+    video.addEventListener('seeked', () => {
+      const jump = Math.abs(video.currentTime - lastKnownTime);
+      if (jump < SEEK_JUMP_THRESHOLD) { lastKnownTime = video.currentTime; return; } // buffering blip, not a real seek
+      sendSync('seek', video.currentTime);
+      lastKnownTime = video.currentTime;
     });
     log(`Attached to ${window.__wpAdapter?.siteName || 'video'} player`);
   }
