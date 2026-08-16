@@ -133,9 +133,11 @@
 
   const SEEK_JUMP_THRESHOLD = 2.5; // seconds — ignore smaller jumps as buffering, not a real seek
   const DRIFT_CORRECTION_THRESHOLD = 8; // seconds — only force-seek on play/pause if drift is this large
-  const MIN_CORRECTION_GAP_MS = 2500; // don't touch currentTime more often than this (DRM players can error on rapid seeks)
+  const MIN_CORRECTION_GAP_MS = 1200; // spacing between actual currentTime writes (DRM players can error on rapid seeks)
   let lastKnownTime = 0;
   let lastCorrectionAt = 0;
+  let pendingCorrectionTimer = null;
+  let pendingCorrectionTarget = null;
 
   function formatTime(t) {
     const s = Math.max(0, Math.round(t));
@@ -146,7 +148,25 @@
 
   async function safeSetCurrentTime(t) {
     const now = Date.now();
-    if (now - lastCorrectionAt < MIN_CORRECTION_GAP_MS) return;
+    const elapsed = now - lastCorrectionAt;
+    if (elapsed < MIN_CORRECTION_GAP_MS) {
+      // Too soon after the last correction to apply another one safely —
+      // remember this as the latest target and apply it once the cooldown
+      // elapses, instead of dropping it. Dropping it silently is what made
+      // back-to-back seeks (e.g. pressing +10 a few times quickly) look
+      // "stuck" until something else eventually triggered a big enough
+      // correction to catch up all at once.
+      pendingCorrectionTarget = t;
+      if (!pendingCorrectionTimer) {
+        pendingCorrectionTimer = setTimeout(() => {
+          pendingCorrectionTimer = null;
+          const target = pendingCorrectionTarget;
+          pendingCorrectionTarget = null;
+          if (target != null) safeSetCurrentTime(target);
+        }, MIN_CORRECTION_GAP_MS - elapsed);
+      }
+      return;
+    }
     lastCorrectionAt = now;
     const adapter = window.__wpAdapter;
     try {
