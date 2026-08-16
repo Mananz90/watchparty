@@ -160,6 +160,19 @@
   // that was the cause of "play doesn't sync sometimes".
   let lastAppliedSync = null; // { action, time, appliedAt }
 
+  // Hard guard for the exact window applyRemoteSync is actively running.
+  // Time-matching alone (isEchoOfAppliedSync) isn't enough: on Netflix, a
+  // correction's seek can still be in flight (its internal seek is async)
+  // when we call video.play()/pause() as part of applying it — that fires a
+  // native play/pause event at the OLD, not-yet-corrected position, which
+  // looked like fresh legitimate state and got broadcast back out. The other
+  // viewer then "corrected" to that stale position, which did the same thing
+  // in reverse — an infinite ping-pong, confirmed directly in a console log.
+  // Blocking every outgoing broadcast for the whole duration we're applying
+  // a remote sync — regardless of what position the video reports firing it
+  // — closes that gap regardless of whether the underlying seek landed.
+  let applyingRemoteSync = false;
+
   function isEchoOfAppliedSync(action, time) {
     if (!lastAppliedSync) return false;
     if (Date.now() - lastAppliedSync.appliedAt > 900) return false;
@@ -235,20 +248,31 @@
     log(`applyRemoteSync: ${msg.action} @ ${formatTime(msg.time)} from "${msg.from}" (we're at ${formatTime(video.currentTime)})`);
     const config = getSyncConfig();
     lastAppliedSync = { action: msg.action, time: msg.time, appliedAt: Date.now() };
-    if (msg.action === 'play') {
-      if (Math.abs(video.currentTime - msg.time) > config.driftCorrectionThreshold) await safeSetCurrentTime(msg.time);
-      video.play().catch((e) => log('video.play() rejected', e));
-    } else if (msg.action === 'pause') {
-      if (Math.abs(video.currentTime - msg.time) > config.driftCorrectionThreshold) await safeSetCurrentTime(msg.time);
-      video.pause();
-    } else if (msg.action === 'seek') {
-      // Skip applying a negligible correction — it wouldn't be visible
-      // anyway, and applying it can itself trigger more native player
-      // events (extra noise to filter, and extra risk on DRM players).
-      if (Math.abs(video.currentTime - msg.time) > config.seekJumpThreshold) await safeSetCurrentTime(msg.time);
-      else log('applyRemoteSync: seek skipped, already close enough');
+    applyingRemoteSync = true;
+    try {
+      if (msg.action === 'play') {
+        if (Math.abs(video.currentTime - msg.time) > config.driftCorrectionThreshold) await safeSetCurrentTime(msg.time);
+        video.play().catch((e) => log('video.play() rejected', e));
+      } else if (msg.action === 'pause') {
+        if (Math.abs(video.currentTime - msg.time) > config.driftCorrectionThreshold) await safeSetCurrentTime(msg.time);
+        video.pause();
+      } else if (msg.action === 'seek') {
+        // Skip applying a negligible correction — it wouldn't be visible
+        // anyway, and applying it can itself trigger more native player
+        // events (extra noise to filter, and extra risk on DRM players).
+        if (Math.abs(video.currentTime - msg.time) > config.seekJumpThreshold) await safeSetCurrentTime(msg.time);
+        else log('applyRemoteSync: seek skipped, already close enough');
+      }
+      lastKnownTime = msg.time;
+    } finally {
+      // Netflix's actual internal seek can still be settling even after our
+      // bridge call resolves (its response is optimistic, not a confirmation
+      // the position has actually moved yet — the real "seeked" event can
+      // land noticeably later). Keep the hard guard up briefly past this
+      // function's own completion to cover that gap; the longer-running
+      // time-based echo check (isEchoOfAppliedSync) covers anything after that.
+      setTimeout(() => { applyingRemoteSync = false; }, 500);
     }
-    lastKnownTime = msg.time;
     // Refresh the echo window's timestamp now that the correction (if any)
     // has actually finished, so a slow multi-step correction doesn't count
     // as "stale" and let its own trailing native events slip through as a
@@ -259,6 +283,10 @@
   function sendSync(action, time) {
     if (!ws || ws.readyState !== WebSocket.OPEN || !video) {
       log(`sendSync(${action}) dropped: ${!ws ? 'no socket' : ws.readyState !== WebSocket.OPEN ? 'socket not open' : 'no video'}`);
+      return;
+    }
+    if (applyingRemoteSync) {
+      log(`sendSync(${action}) dropped: currently applying a remote correction`);
       return;
     }
     if (hostLockEnabled && !isHost()) {
