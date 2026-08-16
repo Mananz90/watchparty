@@ -222,17 +222,31 @@
       // apart from Netflix's own buffering/quality-switch stutters (small jump).
       if (!video.seeking) lastKnownTime = video.currentTime;
     });
-    // 'seeked' (not 'seeking') fires once the browser considers the seek
-    // actually complete, guaranteeing currentTime is the real final position —
-    // reading it off 'seeking' + a guessed timeout was broadcasting a stale
-    // position on sites like Hotstar where the seek itself (fetching new
-    // segments for adaptive streaming) can take longer than that timeout.
-    video.addEventListener('seeked', () => {
+    // 'seeked' fires once the browser considers a seek genuinely complete —
+    // more accurate than reading currentTime off 'seeking' + a guessed
+    // timeout, since the seek itself can take longer to settle than that
+    // timeout on some players. But some custom streaming players (Hotstar's
+    // included) don't reliably fire 'seeked' at all, especially for short
+    // in-buffer skips — so 'seeking' still starts a fallback timer that
+    // fires the broadcast itself if 'seeked' never shows up.
+    let seekFallbackTimer = null;
+    let seekHandled = true;
+
+    function reportSeek() {
+      seekHandled = true;
+      clearTimeout(seekFallbackTimer);
       const jump = Math.abs(video.currentTime - lastKnownTime);
       if (jump < SEEK_JUMP_THRESHOLD) { lastKnownTime = video.currentTime; return; } // buffering blip, not a real seek
       sendSync('seek', video.currentTime);
       lastKnownTime = video.currentTime;
+    }
+
+    video.addEventListener('seeking', () => {
+      seekHandled = false;
+      clearTimeout(seekFallbackTimer);
+      seekFallbackTimer = setTimeout(() => { if (!seekHandled) reportSeek(); }, 700);
     });
+    video.addEventListener('seeked', reportSeek);
     log(`Attached to ${window.__wpAdapter?.siteName || 'video'} player`);
   }
 
