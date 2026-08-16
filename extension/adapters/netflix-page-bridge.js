@@ -10,13 +10,9 @@
     try {
       const videoPlayer = window.netflix.appContext.state.playerApp.getAPI().videoPlayer;
       const sessionId = videoPlayer.getAllPlayerSessionIds()[0];
-      if (sessionId === undefined) {
-        console.log('[Watchparty] netflix bridge: no active player session id');
-        return null;
-      }
+      if (sessionId === undefined) return null;
       return videoPlayer.getVideoPlayerBySessionId(sessionId);
-    } catch (e) {
-      console.log('[Watchparty] netflix bridge: getPlayer() threw', e);
+    } catch {
       return null;
     }
   }
@@ -29,20 +25,19 @@
     let ok = false;
     try {
       const player = getPlayer();
-      if (!player) {
-        console.log('[Watchparty] netflix bridge: no player found, cannot', data.action);
-      } else if (data.action === 'seek') {
-        player.seek(Math.round(data.timeSeconds * 1000));
-        ok = true;
-      } else if (data.action === 'play') {
-        player.play();
-        ok = true;
-      } else if (data.action === 'pause') {
-        player.pause();
-        ok = true;
+      if (player) {
+        if (data.action === 'seek') {
+          player.seek(Math.round(data.timeSeconds * 1000));
+          ok = true;
+        } else if (data.action === 'play') {
+          player.play();
+          ok = true;
+        } else if (data.action === 'pause') {
+          player.pause();
+          ok = true;
+        }
       }
-    } catch (e) {
-      console.log('[Watchparty] netflix bridge: player call threw', e);
+    } catch {
       ok = false;
     }
     window.postMessage({ source: 'watchparty-bridge-response', requestId: data.requestId, ok }, '*');

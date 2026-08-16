@@ -5,17 +5,11 @@ let wpBridgeReqId = 0;
 function callNetflixBridge(action, timeSeconds) {
   return new Promise((resolve) => {
     const requestId = ++wpBridgeReqId;
-    console.log(`[Watchparty] netflix bridge: sending ${action} request #${requestId} (target ${timeSeconds?.toFixed?.(1)}s)`);
-    const timeout = setTimeout(() => {
-      console.log(`[Watchparty] netflix bridge: request #${requestId} timed out with no response after 1s`);
-      cleanup();
-      resolve(false);
-    }, 1000);
+    const timeout = setTimeout(() => { cleanup(); resolve(false); }, 1000);
     function handler(event) {
       if (event.source !== window) return;
       const data = event.data;
       if (!data || data.source !== 'watchparty-bridge-response' || data.requestId !== requestId) return;
-      console.log(`[Watchparty] netflix bridge: request #${requestId} responded ok=${data.ok}`);
       cleanup();
       resolve(!!data.ok);
     }

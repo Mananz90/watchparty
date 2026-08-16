@@ -226,11 +226,8 @@
         // Sites with DRM-protected players (Netflix) need to go through their
         // own internal player API instead of a raw currentTime write — see
         // adapters/netflix.js + adapters/netflix-page-bridge.js.
-        log(`seeking via adapter.seekTo -> ${formatTime(t)}`);
         await adapter.seekTo(video, t);
-        log(`adapter.seekTo resolved, currentTime is now ${formatTime(video.currentTime)}`);
       } else {
-        log(`seeking via direct currentTime write -> ${formatTime(t)}`);
         video.currentTime = t;
       }
     } catch (e) {
@@ -241,18 +238,14 @@
 
   async function applyRemoteSync(msg) {
     video = video || findVideo();
-    if (!video) {
-      log('applyRemoteSync: no video element found, dropping', msg);
-      return;
-    }
-    log(`applyRemoteSync: ${msg.action} @ ${formatTime(msg.time)} from "${msg.from}" (we're at ${formatTime(video.currentTime)})`);
+    if (!video) return;
     const config = getSyncConfig();
     lastAppliedSync = { action: msg.action, time: msg.time, appliedAt: Date.now() };
     applyingRemoteSync = true;
     try {
       if (msg.action === 'play') {
         if (Math.abs(video.currentTime - msg.time) > config.driftCorrectionThreshold) await safeSetCurrentTime(msg.time);
-        video.play().catch((e) => log('video.play() rejected', e));
+        video.play().catch(() => {});
       } else if (msg.action === 'pause') {
         if (Math.abs(video.currentTime - msg.time) > config.driftCorrectionThreshold) await safeSetCurrentTime(msg.time);
         video.pause();
@@ -261,7 +254,6 @@
         // anyway, and applying it can itself trigger more native player
         // events (extra noise to filter, and extra risk on DRM players).
         if (Math.abs(video.currentTime - msg.time) > config.seekJumpThreshold) await safeSetCurrentTime(msg.time);
-        else log('applyRemoteSync: seek skipped, already close enough');
       }
       lastKnownTime = msg.time;
     } finally {
@@ -281,23 +273,10 @@
   }
 
   function sendSync(action, time) {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !video) {
-      log(`sendSync(${action}) dropped: ${!ws ? 'no socket' : ws.readyState !== WebSocket.OPEN ? 'socket not open' : 'no video'}`);
-      return;
-    }
-    if (applyingRemoteSync) {
-      log(`sendSync(${action}) dropped: currently applying a remote correction`);
-      return;
-    }
-    if (hostLockEnabled && !isHost()) {
-      log(`sendSync(${action}) dropped: host-only controls enabled and we're not host`);
-      return;
-    }
-    if (isEchoOfAppliedSync(action, time)) {
-      log(`sendSync(${action}) dropped: echo of our own just-applied correction`);
-      return;
-    }
-    log(`sendSync: broadcasting ${action} @ ${formatTime(time)}`);
+    if (!ws || ws.readyState !== WebSocket.OPEN || !video) return;
+    if (applyingRemoteSync) return; // currently applying a remote correction — don't echo it back
+    if (hostLockEnabled && !isHost()) return; // host-only mode: don't even broadcast our own control input
+    if (isEchoOfAppliedSync(action, time)) return; // our own correction echoing back, not a new action
     ws.send(JSON.stringify({ type: 'sync', action, time }));
   }
 
@@ -350,27 +329,23 @@
       // case a given player never fires 'seeked' for a particular seek.
       let seekFallbackTimer = null;
       let seekHandled = true;
-      const reportSeek = (source) => {
+      const reportSeek = () => {
         seekHandled = true;
         clearTimeout(seekFallbackTimer);
         const jump = Math.abs(video.currentTime - lastKnownTime);
-        log(`${source}: currentTime=${formatTime(video.currentTime)}, jump=${jump.toFixed(1)}s`);
         if (jump < config.seekJumpThreshold) { lastKnownTime = video.currentTime; return; } // buffering blip, not a real seek
         sendSync('seek', video.currentTime);
         lastKnownTime = video.currentTime;
       };
       video.addEventListener('seeking', () => {
-        log('native "seeking" event fired');
         seekHandled = false;
         clearTimeout(seekFallbackTimer);
-        seekFallbackTimer = setTimeout(() => {
-          if (!seekHandled) { log('"seeked" never fired — using 700ms fallback'); reportSeek('seek-fallback'); }
-        }, 700);
+        seekFallbackTimer = setTimeout(() => { if (!seekHandled) reportSeek(); }, 700);
       });
-      video.addEventListener('seeked', () => reportSeek('native "seeked" event'));
+      video.addEventListener('seeked', reportSeek);
     }
 
-    log(`Attached to ${window.__wpAdapter?.siteName || 'video'} player (${config.usePolling ? 'polling' : 'event'} seek detection)`);
+    log(`Attached to ${window.__wpAdapter?.siteName || 'video'} player`);
   }
 
   function attachVideoListeners() {
