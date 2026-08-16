@@ -163,9 +163,18 @@
   function isEchoOfAppliedSync(action, time) {
     if (!lastAppliedSync) return false;
     if (Date.now() - lastAppliedSync.appliedAt > 900) return false;
-    if (lastAppliedSync.action !== action) return false;
     if (Math.abs(time - lastAppliedSync.time) > 1.5) return false;
-    return true;
+    // A 'seek' at a time close to whatever we just applied is almost always
+    // a side effect of that correction (e.g. a play/pause correction that
+    // had to jump position, which fires the player's own seeking/seeked
+    // events) — regardless of what action originally caused it. Requiring
+    // an exact action match here caused those side-effect seeks to be
+    // rebroadcast as brand-new actions instead of recognized as echoes,
+    // which built into a feedback loop bouncing both viewers between two
+    // positions on Netflix. Play/pause still require an exact action match
+    // so a genuine quick toggle right after a correction isn't swallowed.
+    if (action === 'seek') return true;
+    return lastAppliedSync.action === action;
   }
 
   function formatTime(t) {
@@ -226,7 +235,10 @@
       if (Math.abs(video.currentTime - msg.time) > config.driftCorrectionThreshold) await safeSetCurrentTime(msg.time);
       video.pause();
     } else if (msg.action === 'seek') {
-      await safeSetCurrentTime(msg.time);
+      // Skip applying a negligible correction — it wouldn't be visible
+      // anyway, and applying it can itself trigger more native player
+      // events (extra noise to filter, and extra risk on DRM players).
+      if (Math.abs(video.currentTime - msg.time) > config.seekJumpThreshold) await safeSetCurrentTime(msg.time);
     }
     lastKnownTime = msg.time;
     // Refresh the echo window's timestamp now that the correction (if any)
