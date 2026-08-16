@@ -35,7 +35,7 @@ Social & Communication (or: Fun)
 ## Permission justifications (for the CWS review form)
 
 **host_permissions (`*.netflix.com`, `*.hotstar.com`, `*.primevideo.com`, `*.amazon.com`)**
-Required so the extension's content script can find the page's `<video>` element to read/set playback state (play/pause/current time) and inject the chat/sync overlay UI, only on these streaming domains.
+Required so the extension's content script can find the page's `<video>` element to read/set playback state (play/pause/current time) and inject the chat/sync overlay UI, only on these streaming domains. On Netflix specifically, an additional MAIN-world content script (`netflix-page-bridge.js`) reads Netflix's own in-page player API to perform seeks the way Netflix's own UI does, since writing the video element's position directly is rejected by Netflix's player. It only calls existing playback controls (seek/play/pause) — it does not read or transmit any account, billing, or viewing-history data.
 
 **storage**
 Used to remember the user's last-used room code and display name locally in the browser, purely for convenience across sessions. No account or personal data is stored.
@@ -48,4 +48,4 @@ Watchparty's single purpose is to synchronize video playback and provide group c
 
 ## Data disclosure (CWS "Privacy practices" tab)
 - Does this extension collect or transmit user data? Yes — display name, chat messages, and playback timestamps, sent live to other members of the same watch-party room via the developer's own WebSocket server, in order to provide the core synced-viewing feature. Not sold, not used for advertising, not retained after the session ends.
-- Privacy policy URL: (host store/privacy-policy.html publicly, e.g. via GitHub Pages, and paste that URL here)
+- Privacy policy URL: https://mananz90.github.io/watchparty/privacy-policy.html
