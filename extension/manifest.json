@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Watchparty (Free Sync + Chat)",
   "version": "1.5.4",
-  "description": "Sync play/pause/seek, chat, emoji reactions, and a live viewer list with friends — each of you watches on your own Netflix, Hotstar, or Prime Video account.",
+  "description": "Sync play/pause/seek, chat, and reactions with friends on Netflix, Hotstar, or Prime Video — each on your own account.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
     "https://*.netflix.com/*",
